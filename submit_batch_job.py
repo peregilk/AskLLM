@@ -1,102 +1,57 @@
 import os
 import argparse
 import json
-import time
-import jsonlines
 import logging
-from tqdm import tqdm
-import requests
+from google.cloud import bigquery
+from google.cloud.exceptions import NotFound
 from google.auth import default
 from google.auth.transport.requests import Request
-from google.cloud import bigquery
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Load the templates from the template.json file
-with open('template.json', 'r') as f:
-    templates = json.load(f)
+def get_auth_token():
+    credentials, _ = default()
+    credentials.refresh(Request())
+    return credentials.token
 
-# Define the model configuration
-generation_config = {
-    "temperature": 0.5,
-    "top_p": 0.95,
-    "top_k": 40,
-    "max_output_tokens": 8192,
-    "response_mime_type": "application/json",
-}
-safety_settings = []
-
-def prepare_input_data(json_lines_file, dataset_name, table_name, language, batch_size=500):
-    client = bigquery.Client()
-    dataset_ref = client.dataset(dataset_name)
-
-    # Create the dataset if it doesn't exist
-    try:
-        client.get_dataset(dataset_ref)
-        logging.info(f"Dataset {dataset_name} already exists.")
-    except Exception:
-        client.create_dataset(bigquery.Dataset(dataset_ref))
-        logging.info(f"Created dataset {dataset_name}")
-
-    table_ref = dataset_ref.table(table_name)
-    schema = [
-        bigquery.SchemaField("request", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("status", "STRING"),
-        bigquery.SchemaField("response", "STRING"),
-    ]
-
-    # Create the table if it doesn't exist
+def insert_rows_to_bigquery(client, dataset_name, table_name, rows, batch_size=500):
+    table_ref = client.dataset(dataset_name).table(table_name)
     try:
         client.get_table(table_ref)
         logging.info(f"Table {table_name} already exists.")
-    except Exception:
+    except NotFound:
+        schema = [
+            bigquery.SchemaField("request", "STRING"),
+        ]
         table = bigquery.Table(table_ref, schema=schema)
         client.create_table(table)
         logging.info(f"Created table {table_name}")
-
-    chat_prompt = templates[language]
-
-    with jsonlines.open(json_lines_file, mode='r') as reader:
-        lines = list(reader)
-
-    total_lines = len(lines)
-    rows_to_insert = []
-
-    with tqdm(total=total_lines, desc="Preparing input data") as pbar:
-        for line in lines:
-            input_text = line.get("text", line.get("content"))
-            if input_text:
-                prompt = chat_prompt.format(content=input_text)
-                rows_to_insert.append({"request": json.dumps({"contents": [{"role": "user", "parts": [{"text": prompt}]}]})})
-            else:
-                logging.error(f"Field 'text' or 'content' not found in line: {line}")
-            pbar.update(1)
-
-    total_batches = len(rows_to_insert) // batch_size + (1 if len(rows_to_insert) % batch_size != 0 else 0)
     
-    with tqdm(total=total_batches, desc="Inserting rows into BigQuery") as pbar:
-        for i in range(0, len(rows_to_insert), batch_size):
-            batch = rows_to_insert[i:i + batch_size]
-            errors = client.insert_rows_json(table_ref, batch)
-            if errors:
-                logging.error(f"Errors occurred while inserting rows: {errors}")
-            pbar.update(1)
+    errors = []
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        try:
+            errors.extend(client.insert_rows_json(table_ref, batch))
+        except Exception as e:
+            logging.error(f"Error while inserting batch {i // batch_size}: {e}")
 
-    logging.info(f"Inserted {len(rows_to_insert)} rows into {table_name}")
+    if errors:
+        logging.error(f"Encountered errors while inserting rows: {errors}")
+    else:
+        logging.info(f"Inserted {len(rows)} rows successfully.")
 
 def submit_batch_prediction_job(project_id, location, model_id, job_name, dataset_name, input_table_name, output_table_name):
     ENDPOINT = f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/batchPredictionJobs"
     
-    credentials, _ = default()
-    credentials.refresh(Request())
-    auth_token = credentials.token
-
+    auth_token = get_auth_token()
+    
     headers = {
         "Authorization": f"Bearer {auth_token}",
         "Content-Type": "application/json",
     }
-
+    
     payload = {
         "name": job_name,
         "displayName": job_name,
@@ -114,14 +69,51 @@ def submit_batch_prediction_job(project_id, location, model_id, job_name, datase
             }
         }
     }
-
+    
     response = requests.post(ENDPOINT, headers=headers, json=payload)
-    if response.status_code == 200:
-        logging.info(f"Batch prediction job submitted successfully. Job ID: {response.json()['name']}")
-    else:
-        logging.error(f"HTTPError: {response.status_code} {response.reason}")
-        logging.error(f"Response content: {response.content}")
-        response.raise_for_status()
+    response.raise_for_status()
+    
+    job_id = response.json()['name']
+    logging.info(f"Batch prediction job submitted successfully. Job ID: {job_id}")
+    return job_id
+
+def process_json_file(json_lines_file, dataset_name, input_table_name, output_table_name, job_name, project_id, location, model_id, language, batch_size):
+    client = bigquery.Client()
+    
+    # Load the templates from the template.json file
+    with open('template.json', 'r') as f:
+        templates = json.load(f)
+
+    chat_prompt = templates[language]
+
+    with open(json_lines_file, 'r') as file:
+        rows = []
+        for line in file:
+            data = json.loads(line)
+            text = data.get('text') or data.get('content')
+            if text:
+                prompt = chat_prompt.format(content=text)
+                row = {"request": json.dumps({
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generation_config": {
+                        "temperature": 0.5,
+                        "top_p": 0.95,
+                        "top_k": 40,
+                        "max_output_tokens": 8192,
+                        "response_mime_type": "application/json"
+                    },
+                    "safety_settings": []
+                })}
+                rows.append(row)
+            else:
+                logging.error(f"Field 'text' or 'content' not found in line: {line}")
+
+    logging.info("Inserting rows to BigQuery...")
+    insert_rows_to_bigquery(client, dataset_name, input_table_name, rows, batch_size=batch_size)
+
+    logging.info("Submitting batch prediction job...")
+    job_id = submit_batch_prediction_job(project_id, location, model_id, job_name, dataset_name, input_table_name, output_table_name)
+    return job_id
 
 def main():
     parser = argparse.ArgumentParser(description="Submit a batch prediction job to Vertex AI.")
@@ -132,26 +124,43 @@ def main():
     parser.add_argument('--job_name', type=str, required=True, help='Name of the batch prediction job.')
     parser.add_argument('--input_jsonl_file', type=str, required=True, help='Path to the input JSONL file.')
     parser.add_argument('--language', type=str, choices=['en', 'sv', 'da', 'nb', 'nn'], default='en', help='Language for the prompt (default: en).')
-    parser.add_argument('--model_id', type=str, required=True, help='ID of the model to use for prediction.')
+    parser.add_argument('--model_id', type=str, required=True, help='Model ID to use for the prediction.')
     parser.add_argument('--location', type=str, required=True, help='Location of the Vertex AI endpoint.')
-    parser.add_argument('--dryrun', action='store_true', help='Perform a dry run, showing an example of the formatted input.')
+    parser.add_argument('--batch_size', type=int, default=500, help='Batch size for BigQuery inserts (default: 500).')
+    parser.add_argument('--dryrun', action='store_true', help='Output formatted example and do not execute the batch job.')
 
     args = parser.parse_args()
 
     if args.dryrun:
-        with jsonlines.open(args.input_jsonl_file, mode='r') as reader:
-            for line in reader:
-                input_text = line.get("text", line.get("content"))
-                if input_text:
-                    chat_prompt = templates[args.language]
-                    prompt = chat_prompt.format(content=input_text)
-                    example = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-                    logging.info(json.dumps(example, indent=4))
-                    break
-        return
+        with open(args.input_jsonl_file, 'r') as file:
+            for line in file:
+                data = json.loads(line)
+                text = data.get('text') or data.get('content')
+                if text:
+                    # Load the templates from the template.json file
+                    with open('template.json', 'r') as f:
+                        templates = json.load(f)
 
-    prepare_input_data(args.input_jsonl_file, args.dataset_name, args.input_table_name, args.language)
-    submit_batch_prediction_job(args.project_id, args.location, args.model_id, args.job_name, args.dataset_name, args.input_table_name, args.output_table_name)
+                    chat_prompt = templates[args.language]
+                    prompt = chat_prompt.format(content=text)
+                    formatted_example = {
+                        "request": json.dumps({
+                            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                            "generation_config": {
+                                "temperature": 0.5,
+                                "top_p": 0.95,
+                                "top_k": 40,
+                                "max_output_tokens": 8192,
+                                "response_mime_type": "application/json"
+                            },
+                            "safety_settings": []
+                        })
+                    }
+                    logging.info("Dry run - formatted example:")
+                    logging.info(json.dumps(formatted_example, indent=4))
+                    break
+    else:
+        process_json_file(args.input_jsonl_file, args.dataset_name, args.input_table_name, args.output_table_name, args.job_name, args.project_id, args.location, args.model_id, args.language, args.batch_size)
 
 if __name__ == "__main__":
     main()

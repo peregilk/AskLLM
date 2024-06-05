@@ -12,24 +12,8 @@ pip install opentelemetry-api
 pip install opentelemetry-instrumentation
 ````
 
-Create a BigQuery called Fineweb
+This method seems to work best:
 ```
-bq --location=us-central1 mk -d fineweb
-```
-
-Submit a batch job to the FineWeb BigQuery. This will return a `job-id`.
-```
-python submit_batch_job.py --project_id north-390910 --dataset_name fineweb --input_table_name norwegian-input --output_table_name norwegian-output --job_name norwegian10k --input_jsonl_file ../GlotCC/nob-Latn/nob_10000.jsonl --language nb --model_id gemini-1.0-pro-002 --location us-central1
-```
-
-After a while you can check the status:
-```
-python check_batch_status.py --project_id north-390910 --location us-central1 --job_id XXXXX
-```
-
-And look at the first row in the table:
-
-```
-python fetch_example_result.py --project_id north-390910 --dataset_name fineweb --output_table_name output-table
+python generate_async.py --jsonl_file ../GlotCC/nob-Latn/nob_90000.jsonl --output_jsonl_file ../GlotCC/nob-Latn/nob_90000_processed.jsonl --language nb
 ```
 

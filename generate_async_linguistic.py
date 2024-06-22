@@ -19,7 +19,7 @@ LOCATION = "us-central1"
 ENDPOINT_TEMPLATE = "https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{location}/publishers/google/models/{model_id}:generateContent"
 
 # Load the templates
-with open('template.json', 'r') as f:
+with open('template_linguistic.json', 'r') as f:
     TEMPLATES = json.load(f)
 
 # Model configuration
@@ -101,7 +101,10 @@ async def process_batch(session, batch, endpoint, language, total_words):
                 response_json_str = response['candidates'][0]['content']['parts'][0]['text']
                 response_json = json.loads(response_json_str)
                 batch.loc[idx, 'reason'] = response_json.get('reason', 'No reason found')
-                batch.loc[idx, 'educational score'] = response_json.get('educational score', 0)
+                batch.loc[idx, 'cleanliness score'] = int(response_json.get('cleanliness score', 0))
+                batch.loc[idx, 'trimmed cleanliness score'] = int(response_json.get('trimmed cleanliness score', 0))
+                batch.loc[idx, 'trimmed reason'] = response_json.get('trimmed reason', 'No reason found')
+
                 total_words += len(response_json_str.split())
             except Exception as e:
                 logging.error(f"Failed to process response for request {idx}: {e}")

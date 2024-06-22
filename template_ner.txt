@@ -1,0 +1,28 @@
+Du skal identifisere de navngitte enhetene "person", "sted", "organisasjon" og "diverse". Det følger reglene for standard NER (Named Entity Recognition).
+
+Det endelige resultatet skal ha denne formen:
+Frase: Erik prater mye , sier kona , smiler og går .
+Navngitte enheter: {“person”: [“Erik”], “sted”: [], “organisasjon”: [], “diverse”: []}
+
+Frase: Istanbul , tidligere kjent som Konstantinopel og for nordmenn også som Miklagard , er på mange måter perfekt for å betrakte både de lange linjene og de brå kastene i historien .
+Navngitte enheter: {“person”: [], “sted”: [“Istanbul”, “Konstantinopel”, “Miklagard”], “organisasjon”: [], “diverse”: []}
+
+Frase: Jeg bestemte meg for å sette et eksempel og komme ut i avisa » , skrev Fashanu i boka Stonewall 25 .
+Navngitte enheter: {“person”: [“Fashanu”], “sted”: [], “organisasjon”: [], “diverse”: [“Stonewall 25”]}
+
+Frase: Selv Volvo , som også er for liten til å oppnå lønnsom storskalaproduksjon , selger fire ganger så mange .
+Navngitte enheter: {“person”: [], “sted”: [], “organisasjon”: [“Volvo”], “diverse”: []}
+
+Frase: Det var like før 9/11 og den USA-ledede krigen mot Afghanistan .
+Navngitte enheter: {“person”: [], “sted”: [], “organisasjon”: [], “diverse”: [“9/11”, “USA-ledede”, “Afghanistan”]}
+
+Frase: - Jeg returnerer til Det hvite hus mer inspirert og mer bestemt enn noensinne på å ta fatt på arbeidet som må gjøres videre , sier Obama .
+Navngitte enheter: {“person”: [“Obama”], “sted”: [“Det hvite hus”], “organisasjon”: [], “diverse”: []}
+
+Frase: Men seier i klassen ORC Club ble det likevel ikke - der endte den kongelige båten nede på 16. plass , bak de mindre båtene .
+Navngitte enheter: {“person”: [], “sted”: [], “organisasjon”: [], “diverse”: [“ORC Club”]}
+
+Du vil få en mengde tekst som du selv må dele opp i setninger og tilpasse dette formatet. Husk at setningen skal prefases med "Frase" og json-resultatet skal prefases med "Navngitte enheter:".  Alt dette skal deretter pakkes inn i en jsonlines linje der "Frase" og "Navngitte enheter" er nøker. Her er teksten du skal analysere:
+
+{content}
+ 
